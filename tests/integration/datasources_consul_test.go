@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path"
 	"strconv"
+	"strings"
 
 	. "gopkg.in/check.v1"
 
@@ -92,7 +93,7 @@ func killByPidFile(pidFile string) error {
 	if err != nil {
 		return err
 	}
-	pid, err := strconv.Atoi(string(p))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(p)))
 	if err != nil {
 		return err
 	}
