@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -103,6 +104,9 @@ func (s *GitDatasourcesSuite) TestGitHTTPDatasource(c *C) {
 }
 
 func (s *GitDatasourcesSuite) TestGitSSHDatasource(c *C) {
+	if os.Getenv("SSH_AUTH_SOCK") == "" {
+		c.Skip("SSH Agent not running")
+	}
 	result := icmd.RunCommand(GomplateBin,
 		"-c", "short=git+ssh://git@github.com/git-fixtures/basic//json/short.json",
 		"-i", `{{ .short.glossary.title}}`,
