@@ -5,6 +5,7 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -85,6 +86,9 @@ func (s *GitDatasourcesSuite) TestGitFileDatasource(c *C) {
 }
 
 func (s *GitDatasourcesSuite) TestGitDatasource(c *C) {
+	if runtime.GOOS == "windows" {
+		c.Skip("not going to run git daemon on Windows")
+	}
 	s.startGitDaemon()
 	time.Sleep(500 * time.Millisecond)
 
