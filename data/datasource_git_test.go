@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/src-d/go-billy.v4"
 	"gopkg.in/src-d/go-billy.v4/memfs"
+	"gopkg.in/src-d/go-billy.v4/osfs"
 	"gopkg.in/src-d/go-git.v4"
 	"gopkg.in/src-d/go-git.v4/plumbing"
 	"gopkg.in/src-d/go-git.v4/plumbing/object"
@@ -84,7 +85,7 @@ func TestReadGitRepo(t *testing.T) {
 	// w.Move("/foo/bar/hi.txt", "/foo/bar/hello.txt")
 	// w.Commit("renaming file", &git.CommitOptions{})
 
-	_, out, err := g.read(fs, "/bogus")
+	_, _, err = g.read(fs, "/bogus")
 	assert.ErrorContains(t, err, "can't stat /bogus")
 
 	mtype, out, err := g.read(fs, "/")
@@ -194,9 +195,9 @@ func TestOpenFileRepo(t *testing.T) {
 	g := gitsource{}
 
 	overrideFSLoader(repoFS)
-	defer overrideFSLoader(gitroot)
+	defer overrideFSLoader(osfs.New(""))
 
-	fs, repo, err := g.openGitRepo(ctx, mustParseURL("git+file:///repo"), 0)
+	fs, repo, err := g.clone(ctx, mustParseURL("git+file:///repo"), 0)
 	assert.NilError(t, err)
 
 	f, err := fs.Open("/foo/bar/hi.txt")
@@ -215,9 +216,9 @@ func TestOpenBareFileRepo(t *testing.T) {
 	g := gitsource{}
 
 	overrideFSLoader(repoFS)
-	defer overrideFSLoader(gitroot)
+	defer overrideFSLoader(osfs.New(""))
 
-	fs, _, err := g.openGitRepo(ctx, mustParseURL("git+file:///bare.git"), 0)
+	fs, _, err := g.clone(ctx, mustParseURL("git+file:///bare.git"), 0)
 	assert.NilError(t, err)
 
 	f, err := fs.Open("/hello.txt")
@@ -233,7 +234,7 @@ func TestOpenHTTPRepo(t *testing.T) {
 
 	gompURL := "git+ssh://git@github.com/hairyhenderson/gomplate"
 
-	_, repo, err := g.openGitRepo(ctx, mustParseURL(gompURL), 1)
+	_, repo, err := g.clone(ctx, mustParseURL(gompURL), 1)
 	assert.NilError(t, err)
 	// ref, err := repo.Reference(plumbing.NewBranchReferenceName("master"), true)
 	ref, err := repo.Head()

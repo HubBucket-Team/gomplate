@@ -45,8 +45,7 @@ func (s *GitDatasourcesSuite) SetUpSuite(c *C) {
 	result.Assert(c, icmd.Expected{ExitCode: 0})
 }
 
-func (s *GitDatasourcesSuite) startGitDaemon(c *C) {
-	// git daemon --verbose --base-path=/tmp --export-all /tmp/aws-sdk-go
+func (s *GitDatasourcesSuite) startGitDaemon() {
 	var port int
 	port, s.gitDaemonAddr = freeport()
 	gitDaemon := icmd.Command("git", "daemon",
@@ -85,7 +84,7 @@ func (s *GitDatasourcesSuite) TestGitFileDatasource(c *C) {
 }
 
 func (s *GitDatasourcesSuite) TestGitDatasource(c *C) {
-	s.startGitDaemon(c)
+	s.startGitDaemon()
 	time.Sleep(500 * time.Millisecond)
 
 	result := icmd.RunCommand(GomplateBin,
