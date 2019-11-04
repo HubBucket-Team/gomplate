@@ -5,6 +5,7 @@ package integration
 import (
 	"path/filepath"
 	"strconv"
+	"time"
 
 	. "gopkg.in/check.v1"
 
@@ -42,7 +43,9 @@ func (s *GitDatasourcesSuite) SetUpSuite(c *C) {
 
 	result = icmd.RunCmd(icmd.Command("git", "commit", "-m", "Initial commit"), icmd.Dir(repoPath))
 	result.Assert(c, icmd.Expected{ExitCode: 0})
+}
 
+func (s *GitDatasourcesSuite) startGitDaemon(c *C) {
 	// git daemon --verbose --base-path=/tmp --export-all /tmp/aws-sdk-go
 	var port int
 	port, s.gitDaemonAddr = freeport()
@@ -62,10 +65,14 @@ func (s *GitDatasourcesSuite) TearDownSuite(c *C) {
 	defer s.tmpDir.Remove()
 	defer s.pidDir.Remove()
 
-	err := killByPidFile(s.pidDir.Join("git.pid"))
-	handle(c, err)
+	if s.gitDaemonResult != nil {
+		err := killByPidFile(s.pidDir.Join("git.pid"))
+		handle(c, err)
 
-	s.gitDaemonResult.Assert(c, icmd.Expected{ExitCode: 0})
+		s.gitDaemonResult.Cmd.Wait()
+
+		s.gitDaemonResult.Assert(c, icmd.Expected{ExitCode: 0})
+	}
 }
 
 func (s *GitDatasourcesSuite) TestGitFileDatasource(c *C) {
@@ -78,6 +85,9 @@ func (s *GitDatasourcesSuite) TestGitFileDatasource(c *C) {
 }
 
 func (s *GitDatasourcesSuite) TestGitDatasource(c *C) {
+	s.startGitDaemon(c)
+	time.Sleep(500 * time.Millisecond)
+
 	result := icmd.RunCommand(GomplateBin,
 		"-c", "config=git://"+s.gitDaemonAddr+"/repo//config.json",
 		"-i", `{{ .config.foo.bar}}`,

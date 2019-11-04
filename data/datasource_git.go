@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -20,9 +21,7 @@ import (
 	"gopkg.in/src-d/go-git.v4"
 	"gopkg.in/src-d/go-git.v4/plumbing"
 	"gopkg.in/src-d/go-git.v4/plumbing/transport"
-	"gopkg.in/src-d/go-git.v4/plumbing/transport/client"
 	"gopkg.in/src-d/go-git.v4/plumbing/transport/http"
-	"gopkg.in/src-d/go-git.v4/plumbing/transport/server"
 	"gopkg.in/src-d/go-git.v4/plumbing/transport/ssh"
 	"gopkg.in/src-d/go-git.v4/storage/memory"
 )
@@ -43,7 +42,7 @@ func parseGitPath(u *url.URL) (*url.URL, string, error) {
 		out, _ := url.Parse(u.String())
 
 		i := strings.LastIndex(out.Path, path)
-		out.Path = out.Path[:i]
+		out.Path = out.Path[:i-1]
 		return out, path, nil
 	}
 	return nil, "", fmt.Errorf("parseGitPath: inconceivable error")
@@ -52,42 +51,36 @@ func parseGitPath(u *url.URL) (*url.URL, string, error) {
 // gitroot - default filesystem
 var gitroot = osfs.New("/")
 
-func overrideFSLoader(fs billy.Filesystem) {
-	l := server.NewFilesystemLoader(fs)
-	client.InstallProtocol("file", server.NewClient(l))
-}
-
 func readGit(source *Source, args ...string) ([]byte, error) {
 	ctx := context.Background()
 	u := source.URL
-	ref := u.Fragment
 	repoURL, path, err := parseGitPath(u)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(ref)
 
 	g := gitsource{}
 
 	var fs billy.Filesystem
 	switch u.Scheme {
 	case "git+file":
-		fs, _, err = g.openFileRepo(ctx, repoURL)
+		// we can't do shallow clones for filesystem repos apparently
+		fs, _, err = g.openGitRepo(ctx, repoURL, 0)
 		if err != nil {
 			return nil, err
 		}
 	case "git+http", "git+https":
-		fs, _, err = g.openHTTPRepo(ctx, repoURL)
+		fs, _, err = g.openGitRepo(ctx, repoURL, 1)
 		if err != nil {
 			return nil, err
 		}
 	case "git+ssh":
-		fs, _, err = g.openSSHRepo(ctx, repoURL)
+		fs, _, err = g.openGitRepo(ctx, repoURL, 1)
 		if err != nil {
 			return nil, err
 		}
 	case "git":
-		fs, _, err = g.openGitRepo(ctx, repoURL)
+		fs, _, err = g.openGitRepo(ctx, repoURL, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -105,9 +98,9 @@ func readGit(source *Source, args ...string) ([]byte, error) {
 type gitsource struct {
 }
 
-// clone an HTTP(S) repo for later reading. u must be the URL to the repo
+// clone a repo for later reading through http(s), git, or ssh. u must be the URL to the repo
 // itself, and must have any file path stripped
-func (g gitsource) openHTTPRepo(ctx context.Context, u *url.URL) (billy.Filesystem, *git.Repository, error) {
+func (g gitsource) openGitRepo(ctx context.Context, u *url.URL, depth int) (billy.Filesystem, *git.Repository, error) {
 	fs := memfs.New()
 	storer := memory.NewStorage()
 
@@ -116,8 +109,10 @@ func (g gitsource) openHTTPRepo(ctx context.Context, u *url.URL) (billy.Filesyst
 		return nil, nil, err
 	}
 
-	scheme := strings.TrimLeft(u.Scheme, "git+")
-	u.Scheme = scheme
+	if strings.HasPrefix(u.Scheme, "git+") {
+		scheme := u.Scheme[len("git+"):]
+		u.Scheme = scheme
+	}
 
 	var ref plumbing.ReferenceName
 	if strings.HasPrefix(u.Fragment, "refs/") {
@@ -129,95 +124,27 @@ func (g gitsource) openHTTPRepo(ctx context.Context, u *url.URL) (billy.Filesyst
 	}
 	u.Fragment = ""
 
-	repo, err := git.CloneContext(ctx, storer, fs, &git.CloneOptions{
+	opts := &git.CloneOptions{
 		URL:           u.String(),
 		Auth:          auth,
-		Depth:         1,
+		Depth:         depth,
 		ReferenceName: ref,
 		SingleBranch:  true,
 		Tags:          git.NoTags,
-	})
+	}
+	repo, err := git.CloneContext(ctx, storer, fs, opts)
+	if u.Scheme == "file" && err == transport.ErrRepositoryNotFound && !strings.HasSuffix(u.Path, ".git") {
+		// maybe this has a `.git` subdirectory...
+		u.Path = path.Join(u.Path, ".git")
+		return g.openGitRepo(ctx, u, depth)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("git clone for %v failed: %w", u, err)
 	}
 	return fs, repo, nil
 }
 
-// clone an SSH repo for later reading. u must be the URL to the repo
-// itself, and must have any file path stripped
-func (g gitsource) openSSHRepo(ctx context.Context, u *url.URL) (billy.Filesystem, *git.Repository, error) {
-	fs := memfs.New()
-	storer := memory.NewStorage()
-
-	auth, err := g.auth(u)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	scheme := strings.TrimLeft(u.Scheme, "git+")
-	u.Scheme = scheme
-
-	var ref plumbing.ReferenceName
-	if strings.HasPrefix(u.Fragment, "refs/") {
-		ref = plumbing.ReferenceName(u.Fragment)
-	} else if u.Fragment != "" {
-		ref = plumbing.NewBranchReferenceName(u.Fragment)
-	} else {
-		ref = plumbing.Master
-	}
-	u.Fragment = ""
-
-	repo, err := git.CloneContext(ctx, storer, fs, &git.CloneOptions{
-		URL:           u.String(),
-		Auth:          auth,
-		Depth:         1,
-		ReferenceName: ref,
-		SingleBranch:  true,
-		Tags:          git.NoTags,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("git clone for %v failed: %w", u, err)
-	}
-	return fs, repo, nil
-}
-
-func (g gitsource) openGitRepo(ctx context.Context, u *url.URL) (billy.Filesystem, *git.Repository, error) {
-	fs := memfs.New()
-	storer := memory.NewStorage()
-
-	auth, err := g.auth(u)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	scheme := strings.TrimLeft(u.Scheme, "git+")
-	u.Scheme = scheme
-
-	var ref plumbing.ReferenceName
-	if strings.HasPrefix(u.Fragment, "refs/") {
-		ref = plumbing.ReferenceName(u.Fragment)
-	} else if u.Fragment != "" {
-		ref = plumbing.NewBranchReferenceName(u.Fragment)
-	} else {
-		ref = plumbing.Master
-	}
-	u.Fragment = ""
-
-	repo, err := git.CloneContext(ctx, storer, fs, &git.CloneOptions{
-		URL:           u.String(),
-		Auth:          auth,
-		Depth:         1,
-		ReferenceName: ref,
-		SingleBranch:  true,
-		Tags:          git.NoTags,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("git clone for %v failed: %w", u, err)
-	}
-	return fs, repo, nil
-}
-
-func (g gitsource) openFileRepo(ctx context.Context, u *url.URL) (billy.Filesystem, *git.Repository, error) {
+func (g gitsource) openFileRepo(ctx context.Context, u *url.URL, depth int) (billy.Filesystem, *git.Repository, error) {
 	// repo := u.Path
 	// fs, err := rootFS.Chroot(repo)
 	// if err != nil {
@@ -238,8 +165,10 @@ func (g gitsource) openFileRepo(ctx context.Context, u *url.URL) (billy.Filesyst
 		return nil, nil, err
 	}
 
-	scheme := strings.TrimLeft(u.Scheme, "git+")
-	u.Scheme = scheme
+	if strings.HasPrefix(u.Scheme, "git+") {
+		scheme := u.Scheme[len("git+"):]
+		u.Scheme = scheme
+	}
 
 	var ref plumbing.ReferenceName
 	if strings.HasPrefix(u.Fragment, "refs/") {
@@ -251,14 +180,20 @@ func (g gitsource) openFileRepo(ctx context.Context, u *url.URL) (billy.Filesyst
 	}
 	u.Fragment = ""
 
-	repo, err := git.CloneContext(ctx, storer, fs, &git.CloneOptions{
-		URL:  u.String(),
-		Auth: auth,
-		// Depth:         1,
+	opts := &git.CloneOptions{
+		URL:           u.String(),
+		Auth:          auth,
+		Depth:         depth,
 		ReferenceName: ref,
 		SingleBranch:  true,
 		Tags:          git.NoTags,
-	})
+	}
+	repo, err := git.CloneContext(ctx, storer, fs, opts)
+	if u.Scheme == "file" && err == transport.ErrRepositoryNotFound && !strings.HasSuffix(u.Path, ".git") {
+		// maybe this has a `.git` subdirectory...
+		u.Path = path.Join(u.Path, ".git")
+		return g.openFileRepo(ctx, u, depth)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("git clone for %v failed: %w", u, err)
 	}
